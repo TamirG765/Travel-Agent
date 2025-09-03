@@ -20,11 +20,12 @@ import json
 import sys
 from typing import List
 import requests
+from pydantic import BaseModel, Field
 
-from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_tavily import TavilySearch
 
 from langchain_core.messages import (
     HumanMessage,
@@ -34,27 +35,23 @@ from langchain_core.messages import (
     BaseMessage,
 )
 from langchain.tools import tool
+from prompts import SYSTEM_PROMPT
 
-# ---------------------------
-# Setup
-# ---------------------------
+from dotenv import load_dotenv
 load_dotenv()
+
 MODEL_NAME = os.getenv("OLLAMA_MODEL", "llama3.2")
-
-SYSTEM_PROMPT = """You are a friendly, precise travel assistant.
-- Maintain context across turns (use memory).
-- Use tools for weather and country facts.
-- Keep answers concise; use lists when helpful.
-- Only show short reasoning takeaways if useful.
-- End with a helpful next-step when appropriate.
-
-Tool policy:
-- Weather queries -> call weather_data.
-- Country facts (visa, currency, safety, tipping) -> call country_info.
-"""
+os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY")
 
 # ---------------------------
-# Tools (mock)
+# Pydantic Models
+# ---------------------------
+class SearchQuery(BaseModel):
+    """Search query for web search"""
+    search_query: str = Field(description="Search query for web search")
+
+# ---------------------------
+# Tools
 # ---------------------------
 @tool
 def get_weather_data(location: str) -> str:
@@ -83,11 +80,49 @@ def get_weather_data(location: str) -> str:
         return f"Weather data unavailable for {location}: {e}"
 
 @tool
-def country_info(location: str) -> str:
-    """Get country information for a location (mock)."""
-    return f"[mock] Country info for {location}: Currency EUR, Schengen, Safety High, Tipping Optional"
+def web_search_tavily(query: str, max_results: int = 5) -> str:
+    """Search the web for up-to-date travel info using Tavily API with structured approach."""
+    try:
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+            return "Search unavailable: TAVILY_API_KEY not configured"
 
-TOOLS = [get_weather_data, country_info]
+        # Initialize Tavily search
+        tavily_search = TavilySearch(
+            api_wrapper_kwargs={"api_key": api_key},
+            max_results=max_results
+        )
+        
+        # Get search results
+        search_response = tavily_search.invoke(query)
+        
+        # Handle TavilySearch response format (it returns a dict with 'results' key)
+        if isinstance(search_response, dict) and 'results' in search_response:
+            results = search_response['results']
+            formatted_docs = []
+            for doc in results:
+                if isinstance(doc, dict):
+                    url = doc.get("url", "")
+                    content = doc.get("content", "") or doc.get("raw_content", "") or doc.get("title", "")
+                    if content:
+                        formatted_docs.append(f'<Document href="{url}"/>\n{content}\n</Document>')
+            return "\n\n---\n\n".join(formatted_docs) if formatted_docs else "No results found"
+        elif isinstance(search_response, str):
+            # If it returns a string, wrap in document format
+            return f'<Document href="tavily-search"/>\n{search_response}\n</Document>'
+        else:
+            return f'<Document href="tavily-search"/>\n{str(search_response)}\n</Document>'
+
+    except Exception as e:
+        return f"Search failed: {e}"
+
+@tool
+def continue_chat(user_message: str) -> str:
+    """Handle general conversation that doesn't require weather data or web searches"""
+    _ = user_message  # Mark as used
+    return "CONTINUE_CHAT"
+
+TOOLS = [get_weather_data, web_search_tavily, continue_chat]
 
 # ---------------------------
 # Agent builder
@@ -167,7 +202,7 @@ def main():
     config = {"configurable": {"thread_id": thread_id}}
 
     # Seed memory with system prompt (store once)
-    init_state = {"messages": [SystemMessage(content=SYSTEM_PROMPT)]}
+    init_state = {"messages": [SystemMessage(content=f"{SYSTEM_PROMPT}")] }
     state = agent.invoke(init_state, config)
     seen = len(state.get("messages", []))  # track how many messages we've printed
 
@@ -180,7 +215,7 @@ def main():
 
         if not user:
             continue
-        if user.lower() in {"exit", "quit"}:
+        if user.lower() in {"exit", "quit", 'q'}:
             print("Bye!")
             break
 
@@ -195,7 +230,7 @@ def main():
             continue
 
         msgs: List[BaseMessage] = state.get("messages", [])
-        seen = print(msgs[-1].content)
+        seen = print_turn(msgs, start_idx=seen)
 
 if __name__ == "__main__":
     # Small guard so the script exits cleanly in some terminals
