@@ -21,6 +21,7 @@ import sys
 from typing import List
 import requests
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
@@ -80,7 +81,7 @@ def get_weather_data(location: str) -> str:
         return f"Weather data unavailable for {location}: {e}"
 
 @tool
-def web_search_tavily(query: str, max_results: int = 5) -> str:
+def web_search_tavily(query: str, max_results: int = 2) -> str:
     """Search the web for up-to-date travel info using Tavily API with structured approach."""
     try:
         api_key = os.getenv("TAVILY_API_KEY")
@@ -122,18 +123,20 @@ def continue_chat(user_message: str) -> str:
     _ = user_message  # Mark as used
     return "CONTINUE_CHAT"
 
+
 TOOLS = [get_weather_data, web_search_tavily, continue_chat]
 
 # ---------------------------
 # Agent builder
 # ---------------------------
 def build_agent():
-    model = ChatOllama(model=MODEL_NAME)
+    model = ChatOllama(model=MODEL_NAME, temperature=0.2)
     checkpointer = MemorySaver()
     agent = create_react_agent(
         model=model,
         tools=TOOLS,
         checkpointer=checkpointer,
+        prompt=SYSTEM_PROMPT
     )
     return agent
 
@@ -194,7 +197,7 @@ def print_turn(messages: List[BaseMessage], start_idx: int = 0) -> int:
 # CLI using invoke()
 # ---------------------------
 def main():
-    print(f"Travel CLI Agent (invoke-mode, model={MODEL_NAME})")
+    print(f"Travel CLI Agent (invoke-mode, model={MODEL_NAME}) — composite tools enabled")
     print("Type your message. Type 'exit' to quit.")
 
     agent = build_agent()
@@ -202,7 +205,7 @@ def main():
     config = {"configurable": {"thread_id": thread_id}}
 
     # Seed memory with system prompt (store once)
-    init_state = {"messages": [SystemMessage(content=f"{SYSTEM_PROMPT}")] }
+    init_state = {"messages": [HumanMessage(content="Hey")] }
     state = agent.invoke(init_state, config)
     seen = len(state.get("messages", []))  # track how many messages we've printed
 
