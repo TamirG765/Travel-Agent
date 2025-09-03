@@ -55,7 +55,7 @@ def get_weather_data(location: str) -> str:
 tools = [get_weather_data]
 
 # LLM with tools bound
-llm_with_tools = ChatOllama(model="llama3.2", temperature=0).bind_tools(tools)
+llm_with_tools = ChatOllama(model="qwen3", temperature=0).bind_tools(tools)
 
 # System message
 sys_msg = SystemMessage(content=TRAVEL_ASSISTANT_SYSTEM_MESSAGE)
