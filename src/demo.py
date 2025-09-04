@@ -56,70 +56,111 @@ class SearchQuery(BaseModel):
 # ---------------------------
 @tool
 def get_weather_data(location: str) -> str:
-    """Get real-time weather data for a location using OpenWeatherMap API"""
-    try:
-        api_key = os.getenv("WEATHER_API_KEY")
-        if not api_key:
-            return "Weather data unavailable: API key not configured"
-        url = "https://api.openweathermap.org/data/2.5/forecast"
-        resp = requests.get(url, params={"q": location, "appid": api_key}, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if not data.get("list"):
-            return f"No weather data available for {location}"
-        cf = data["list"][0]
-        temp_c = round(cf["main"]["temp"] - 273.15, 1)
-        desc = cf["weather"][0]["description"]
-        hum = cf["main"]["humidity"]
-        t = cf["dt_txt"]
-        return f"Weather in {location}: {temp_c}°C, {desc}, humidity {hum}% (forecast for {t})"
-    except requests.exceptions.RequestException:
-        return f"Failed to get weather data for {location}: Network error"
-    except KeyError:
-        return f"Failed to parse weather data for {location}: Invalid response format"
-    except Exception as e:
-        return f"Weather data unavailable for {location}: {e}"
+    """Use for PACKING or weather context. Input must be a city or location name.
+    Return: 'weather: {temp_c: <float>, feels_like_c: <float>, description: "<text>", humidity: <int>, timestamp: "<YYYY-MM-DD HH:MM:SS>"}'."""
+    # Input sanity
+    if not location or not isinstance(location, str) or len(location.strip()) < 2:
+        return "I need a city/location name to check weather."
+    location = location.strip()
+
+    api_key = os.getenv("WEATHER_API_KEY")
+    if not api_key:
+        return "Weather data unavailable: API key not configured"
+
+    url = "https://api.openweathermap.org/data/2.5/forecast"
+    params = {"q": location, "appid": api_key}
+    last_error = None
+
+    # Tiny resilience: retry once on transient failures
+    for attempt in range(2):
+        try:
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("list"):
+                return f"No weather data available for {location}"
+            cf = data["list"][0]
+            temp_c = round(cf["main"]["temp"] - 273.15, 1)
+            feels_c = round(cf["main"]["feels_like"] - 273.15, 1) if "feels_like" in cf["main"] else temp_c
+            desc = cf["weather"][0]["description"]
+            hum = int(cf["main"]["humidity"])
+            t = cf.get("dt_txt") or datetime.utcfromtimestamp(cf.get("dt", 0)).strftime("%Y-%m-%d %H:%M:%S")
+            # Mini-JSON-ish string the model can parse reliably
+            return f'weather: {{temp_c: {temp_c}, feels_like_c: {feels_c}, description: "{desc}", humidity: {hum}, timestamp: "{t}"}}'
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt == 0:
+                continue
+        except Exception as e:
+            last_error = e
+            break
+
+    return f"Weather data unavailable for {location}: {last_error or 'Unknown error'}"
 
 @tool
 def web_search_tavily(query: str, max_results: int = 2) -> str:
-    """Search the web for up-to-date travel info using Tavily API with structured approach."""
+    """Use for DESTINATION IDEAS and LOCAL ATTRACTIONS. Avoid for packing/weather.
+    Return: 'sources: [{title: "...", url: "...", summary: "..."}]'."""
+    if not query or not isinstance(query, str) or len(query.strip()) == 0:
+        return "sources: []"
+    query = query.strip()
+
     try:
         api_key = os.getenv("TAVILY_API_KEY")
         if not api_key:
             return "Search unavailable: TAVILY_API_KEY not configured"
 
-        # Initialize Tavily search
         tavily_search = TavilySearch(
             api_wrapper_kwargs={"api_key": api_key},
             max_results=max_results
         )
-        
-        # Get search results
-        search_response = tavily_search.invoke(query)
-        
-        # Handle TavilySearch response format (it returns a dict with 'results' key)
-        if isinstance(search_response, dict) and 'results' in search_response:
-            results = search_response['results']
-            formatted_docs = []
-            for doc in results:
-                if isinstance(doc, dict):
-                    url = doc.get("url", "")
-                    content = doc.get("content", "") or doc.get("raw_content", "") or doc.get("title", "")
-                    if content:
-                        formatted_docs.append(f'<Document href="{url}"/>\n{content}\n</Document>')
-            return "\n\n---\n\n".join(formatted_docs) if formatted_docs else "No results found"
-        elif isinstance(search_response, str):
-            # If it returns a string, wrap in document format
-            return f'<Document href="tavily-search"/>\n{search_response}\n</Document>'
-        else:
-            return f'<Document href="tavily-search"/>\n{str(search_response)}\n</Document>'
 
+        last_error = None
+        for attempt in range(2):
+            try:
+                search_response = tavily_search.invoke(query)
+                break
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    continue
+                return "sources: []"
+
+        # Normalize to list of dicts
+        results = []
+        if isinstance(search_response, dict) and "results" in search_response:
+            results = search_response["results"] or []
+        elif isinstance(search_response, list):
+            results = search_response
+        else:
+            # Unknown shape; best-effort wrap
+            return f'sources: [{{title: "Result", url: "tavily-search", summary: "{str(search_response)[:200]}..."}}]'
+
+        normalized = []
+        for doc in results[: max_results if max_results else 2]:
+            if not isinstance(doc, dict):
+                continue
+            url = (doc.get("url") or "").strip()
+            title = (doc.get("title") or "").strip()
+            content = (doc.get("content") or doc.get("raw_content") or "").strip()
+            summary = (content[:280] + "…") if len(content) > 280 else content
+            if url or title or summary:
+                # Ensure quotes are safe in the mini-JSON string
+                safe_title = title.replace('"', "'")
+                safe_url = url.replace('"', "'")
+                safe_summary = summary.replace('"', "'")
+                normalized.append(f'{{title: "{safe_title}", url: "{safe_url}", summary: "{safe_summary}"}}')
+
+        if not normalized:
+            return "sources: []"
+
+        return f'sources: [{", ".join(normalized)}]'
     except Exception as e:
-        return f"Search failed: {e}"
+        return "sources: []"
 
 @tool
 def continue_chat(user_message: str) -> str:
-    """Handle general conversation that doesn't require weather data or web searches"""
+    """Handle generic advice or chit-chat when no external data is needed. The agent may use this when the answer is stable and non-volatile (e.g., general packing principles)."""
     _ = user_message  # Mark as used
     return "CONTINUE_CHAT"
 
@@ -199,6 +240,11 @@ def print_turn(messages: List[BaseMessage], start_idx: int = 0) -> int:
 def main():
     print(f"Travel CLI Agent (invoke-mode, model={MODEL_NAME}) — composite tools enabled")
     print("Type your message. Type 'exit' to quit.")
+
+    print("\nTry these:")
+    print("  • Warm places in November?")
+    print("  • What should I pack for Tokyo next week?")
+    print("  • Top attractions in Rome for a day trip")
 
     agent = build_agent()
     thread_id = str(uuid.uuid4())
