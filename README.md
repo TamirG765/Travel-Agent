@@ -2,7 +2,7 @@
 
 An AI travel assistant built with LangGraph and Streamlit.
 
-[Demo](Working_Transcript.gif)
+![Demo](Working_Transcript.gif)
 
 ## Features
 
