@@ -1,8 +1,8 @@
 """
 Travel Agent Module
 
-This module handles the creation and configuration of the travel assistant agent.
-It uses LangGraph's ReAct agent with memory capabilities.
+Simple functions for creating and managing the travel assistant agent.
+Uses LangGraph's ReAct agent with memory capabilities.
 """
 
 import os
@@ -16,106 +16,110 @@ from .prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
+# Global variables to store the agent and checkpointer
+_agent = None
+_checkpointer = None
+_current_model_name = None
+_current_temperature = None
 
-class TravelAgent:
-    """Travel Assistant Agent with memory and tool capabilities"""
+
+def _create_agent(model_name: str = None, temperature: float = 0.2):
+    """Create the ReAct agent with tools and memory"""
+    global _agent, _checkpointer, _current_model_name, _current_temperature
     
-    def __init__(self, model_name: str = None, temperature: float = 0.2):
-        """
-        Initialize the travel agent
+    model_name = model_name or os.getenv("OLLAMA_MODEL", "llama3.1")
+    
+    try:
+        # Initialize the language model
+        model = ChatOllama(
+            model=model_name, 
+            temperature=temperature
+        )
         
-        Args:
-            model_name: Name of the Ollama model to use
-            temperature: Model temperature for response randomness
-        """
-        self.model_name = model_name or os.getenv("OLLAMA_MODEL", "llama3.2")
-        self.temperature = temperature
-        self.agent = None
-        self.checkpointer = None
+        # Initialize memory checkpointer
+        _checkpointer = MemorySaver()
         
-        logger.info(f"Initializing TravelAgent with model: {self.model_name}")
-        self._create_agent()
+        # Create the agent
+        _agent = create_react_agent(
+            model=model,
+            tools=TRAVEL_TOOLS,
+            checkpointer=_checkpointer,
+            prompt=SYSTEM_PROMPT
+        )
+        
+        # Store current configuration
+        _current_model_name = model_name
+        _current_temperature = temperature
+        
+        logger.info(f"Agent created successfully with model: {model_name} and {len(TRAVEL_TOOLS)} tools")
+        
+    except Exception as e:
+        logger.error(f"Failed to create agent: {e}")
+        raise
+
+
+def get_agent():
+    """Get the initialized agent, creating it if necessary"""
+    if _agent is None:
+        _create_agent()
+    return _agent
+
+
+def invoke_agent(messages: list, thread_id: str):
+    """
+    Invoke the agent with messages and thread context
     
-    def _create_agent(self):
-        """Create the ReAct agent with tools and memory"""
-        try:
-            # Initialize the language model
-            model = ChatOllama(
-                model=self.model_name, 
-                temperature=self.temperature
-            )
-            
-            # Initialize memory checkpointer
-            self.checkpointer = MemorySaver()
-            
-            # Create the agent
-            self.agent = create_react_agent(
-                model=model,
-                tools=TRAVEL_TOOLS,
-                checkpointer=self.checkpointer,
-                prompt=SYSTEM_PROMPT
-            )
-            
-            logger.info(f"Agent created successfully with {len(TRAVEL_TOOLS)} tools")
-            
-        except Exception as e:
-            logger.error(f"Failed to create agent: {e}")
-            raise
-    
-    def get_agent(self):
-        """Get the initialized agent"""
-        if not self.agent:
-            raise RuntimeError("Agent not initialized")
-        return self.agent
-    
-    def get_config(self, thread_id: str) -> Dict[str, Any]:
-        """Get configuration for agent with specific thread ID"""
-        return {"configurable": {"thread_id": thread_id}}
+    Args:
+        messages: List of messages to process
+        thread_id: Thread ID for conversation context
+        
+    Returns:
+        Agent response state
+    """
+    try:
+        agent = get_agent()
+        config = {"configurable": {"thread_id": thread_id}}
+        state = {"messages": messages}
+        
+        logger.info(f"Invoking agent for thread: {thread_id}")
+        result = agent.invoke(state, config)
+        logger.info("Agent invocation completed successfully")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Agent invocation failed: {e}")
+        raise
+
+
+# Simple object to maintain compatibility with existing streamlit code
+class SimpleAgent:
+    """Simple wrapper to maintain compatibility"""
     
     def invoke(self, messages: list, thread_id: str):
-        """
-        Invoke the agent with messages and thread context
-        
-        Args:
-            messages: List of messages to process
-            thread_id: Thread ID for conversation context
-            
-        Returns:
-            Agent response state
-        """
-        try:
-            config = self.get_config(thread_id)
-            state = {"messages": messages}
-            
-            logger.info(f"Invoking agent for thread: {thread_id}")
-            result = self.agent.invoke(state, config)
-            logger.info("Agent invocation completed successfully")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Agent invocation failed: {e}")
-            raise
-    
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the current model configuration"""
-        return {
-            "model_name": self.model_name,
-            "temperature": self.temperature,
-            "tools_count": len(TRAVEL_TOOLS),
-            "tools": [tool.name for tool in TRAVEL_TOOLS]
-        }
+        return invoke_agent(messages, thread_id)
 
 
-def create_travel_agent(model_name: str = None, temperature: float = 0.2) -> TravelAgent:
+def create_travel_agent(model_name: str = None, temperature: float = 0.2):
     """
-    Factory function to create a travel agent
+    Create or recreate the travel agent with specified configuration
     
     Args:
         model_name: Ollama model name
         temperature: Response randomness (0.0 - 1.0)
         
     Returns:
-        Initialized TravelAgent instance
+        Simple agent wrapper for compatibility
     """
-    return TravelAgent(model_name=model_name, temperature=temperature)
+    _create_agent(model_name, temperature)
+    return SimpleAgent()
+
+
+def get_model_info() -> Dict[str, Any]:
+    """Get information about the current model configuration"""
+    return {
+        "model_name": _current_model_name,
+        "temperature": _current_temperature,
+        "tools_count": len(TRAVEL_TOOLS),
+        "tools": [tool.name for tool in TRAVEL_TOOLS]
+    }

@@ -12,10 +12,9 @@ Features:
 import streamlit as st
 import uuid
 import logging
-import json
-from datetime import datetime
-from typing import List, Dict, Any
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
+import os
+from typing import Dict
+from langchain_core.messages import HumanMessage, AIMessage
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -65,8 +64,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-
-
 def init_session_state():
     """Initialize session state variables"""
     if 'messages' not in st.session_state:
@@ -80,7 +77,7 @@ def init_session_state():
     
     
     if 'model_name' not in st.session_state:
-        st.session_state.model_name = "llama3.2"
+        st.session_state.model_name = os.getenv("OLLAMA_MODEL", "llama3.1")
     
     if 'temperature' not in st.session_state:
         st.session_state.temperature = 0.2
@@ -187,7 +184,14 @@ def main():
                 assistant_response = ""
                 for msg in reversed(messages):
                     if isinstance(msg, AIMessage) and msg.content and not msg.additional_kwargs.get("tool_calls"):
-                        assistant_response = msg.content.strip()
+                        full_response = msg.content.strip()
+                        # Extract only the text after the LAST "Final answer:"
+                        if "Final answer:" in full_response:
+                            # Split by "Final answer:" and take the last part
+                            parts = full_response.split("Final answer:")
+                            assistant_response = parts[-1].strip()
+                        else:
+                            assistant_response = full_response
                         break
                 
                 if assistant_response:

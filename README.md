@@ -57,7 +57,7 @@ Features:
 
 ## API Keys
 
-- **Weather**: Get free API key from [OpenWeatherMap](https://openweathermap.org/api)
+- **Weather**: Get free API key from [OpenWeatherMap - Used the free 5 day forecast API](https://openweathermap.org/forecast5)
 - **Web Search**: Get API key from [Tavily](https://tavily.com/)
 
 Both are optional - the app provides fallback responses when APIs are unavailable.
