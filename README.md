@@ -2,6 +2,8 @@
 
 An AI travel assistant built with LangGraph and Streamlit.
 
+[Demo](Working Transcript.gif)
+
 ## Features
 
 - **Smart Travel Assistant**: Uses Ollama local LLMs with ReAct architecture
