@@ -1,54 +1,98 @@
-# Travel Assistant - LangGraph Demo
+# Travel Assistant
 
-A conversational AI travel assistant built with LangGraph that demonstrates advanced prompt engineering and natural conversation flow.
+An AI travel assistant built with LangGraph, LangChain, and Streamlit.
 
 ## Features
 
-### 🤖 Query Types Supported
-- **Destination Recommendations**: Get personalized travel destination suggestions
-- **Packing Advice**: Receive detailed packing lists based on destination and season
-- **Local Attractions**: Discover activities and sights at your destination
-- **Weather Information**: Get current weather data and climate insights
+- **Smart Travel Assistant**: Uses Ollama - local LLMs
+- **Real-time Data**: Weather API (OpenWeatherMap) and web search API (Tavily)
+- **Clean Chat Interface**: Streamlit-based UI focused on conversation
+- **Memory & Context**: Maintains conversation history across interactions in-chat
 
-### 🧠 Advanced Capabilities
-- **Chain-of-Thought Reasoning**: Multi-step reasoning for complex travel planning
-- **Contextual Conversations**: Maintains conversation history and context
-- **External Data Integration**: Weather API and country information
-- **Intelligent Routing**: Conditional workflow based on query type and data needs
+## Project Structure
 
-## Quick Start
+```
+Travel-Agent/
+├── src/
+│   ├── __init__.py        # Package initialization
+│   ├── tools.py           # Weather & web search tools
+│   ├── agent.py           # Agent creation & configuration
+│   └── prompts.py         # System prompts with anti-hallucination
+├── streamlit_app.py       # Main Streamlit application
+├── requirements.txt       # Python dependencies
+└── .env                   # Environment variables
+```
 
-### Prerequisites
-- Python 3.8+
-- Ollama installed and running
-- A language model (e.g., `llama3.1`) installed in Ollama
+## Setup
 
-### Installation
+0. **Install Ollama** from [Ollama](https://ollama.com/)
 
-1. **Install dependencies:**
+1. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-2. **Set up Ollama:**
+2. **Configure environment** (create `.env` file):
    ```bash
-   # Install and start Ollama
-   ollama serve
-   
-   # Pull a model (in another terminal)
-   ollama pull llama3.1
+   OLLAMA_MODEL=llama3.2
+   WEATHER_API_KEY=your_openweather_api_key
+   TAVILY_API_KEY=your_tavily_api_key
    ```
 
-3. **Configure environment (optional):**
+3. **Start Ollama / Open terminal** and pull the model:
    ```bash
-   cp .env.example .env
-   # Edit .env to add your weather API key if desired
+   ollama pull llama3.2
    ```
 
-4. **Run the assistant:**
-   ```bash
-   python main.py
-   ```
+## Usage
+
+### Streamlit Web Interface (Recommended)
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Features:
+- Clean chat interface (user/assistant messages only)
+
+## API Keys
+
+- **Weather**: Get free API key from [OpenWeatherMap](https://openweathermap.org/api)
+- **Web Search**: Get API key from [Tavily](https://tavily.com/)
+
+Both are optional - the app provides fallback responses when APIs are unavailable.
+
+## Model Configuration
+
+Supported Ollama models:
+- `llama3.2` (default) - Fast, efficient
+- `llama3.1` - Larger context window
+- `qwen2.5` - Alternative option
+- `mistral` - Lightweight option
+
+Configure via environment variable or Streamlit sidebar.
+
+## Architecture
+
+This travel assistant uses a **ReAct (Reasoning + Acting) architecture** where the agent:
+
+1. **Reasons** about the user's query
+2. **Acts** by calling tools when needed (weather API, web search)
+3. **Observes** the tool results  
+4. **Responds** with informed, up-to-date information
+
+The modular structure makes it easy to:
+- Add new tools in `src/tools.py`
+- Modify agent behavior in `src/agent.py` 
+- Update prompts in `src/prompts.py`
+- Extend the UI in `streamlit_app.py`
+
+## Example Queries
+
+- "What should I pack for Tokyo next week?"
+- "Warm places to visit in November?"
+- "Top attractions in Rome for a day trip"
+- "Weather in Barcelona today"
 
 ## Usage Examples
 
