@@ -17,64 +17,162 @@ from langchain_tavily import TavilySearch
 # Set up logging for tool usage
 logger = logging.getLogger(__name__)
 
+
 @tool
-def get_weather_data(location: str) -> str:
-    """Use for PACKING or weather context. Input must be a city or location name.
-    Return: 'weather: {temp_c: <float>, feels_like_c: <float>, description: "<text>", humidity: <int>, timestamp: "<YYYY-MM-DD HH:MM:SS>"}'."""
-    logger.info(f"Getting weather data for: {location}")
+def get_weather_forecast(location: str, days: int = 5) -> str:
+    """
+    Get weather forecast for the next 1-5 days for trip planning and packing decisions.
+    
+    Args:
+        location (str): City or location name (e.g., "London", "New York", "Tokyo")
+        days (int): Number of days to forecast (1-5, default: 5)
+    
+    Returns:
+        str: Formatted forecast data with daily weather summaries including:
+             - Date and day of week
+             - Temperature range (min/max in Celsius)
+             - Weather description
+             - Humidity and precipitation probability
+    
+    Use this tool when users ask about:
+    - Weather for upcoming days/week
+    - Trip planning weather conditions
+    - What to pack based on forecast
+    - Weather trends over multiple days
+    
+    Example usage:
+    - "What's the weather forecast for Paris for the next 3 days?"
+    - "I'm traveling to Tokyo next week, what should I expect?"
+    - "Will it rain in London this week?"
+    """
+    logger.info(f"Getting {days}-day weather forecast for: {location}")
     
     # Input validation
     if not location or not isinstance(location, str) or len(location.strip()) < 2:
         logger.warning(f"Invalid location input: {location}")
-        return "I need a city/location name to check weather."
+        return "I need a valid city/location name to get weather forecast."
+    
+    if not isinstance(days, int) or days < 1 or days > 5:
+        days = 5
+        logger.info(f"Invalid days parameter, defaulting to {days} days")
     
     location = location.strip()
     api_key = os.getenv("WEATHER_API_KEY")
     
     if not api_key:
         logger.warning("Weather API key not configured")
-        return "Weather data unavailable: API key not configured"
+        return "Weather forecast unavailable: API key not configured"
 
     url = "https://api.openweathermap.org/data/2.5/forecast"
-    params = {"q": location, "appid": api_key}
-    last_error = None
-
-    # Retry logic for resilience
-    for attempt in range(2):
-        try:
-            logger.debug(f"Weather API request attempt {attempt + 1} for {location}")
-            resp = requests.get(url, params=params, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if not data.get("list"):
-                logger.warning(f"No weather data available for {location}")
-                return f"No weather data available for {location}"
-            
-            # Parse weather data
-            cf = data["list"][0]
-            temp_c = round(cf["main"]["temp"] - 273.15, 1)
-            feels_c = round(cf["main"]["feels_like"] - 273.15, 1) if "feels_like" in cf["main"] else temp_c
-            desc = cf["weather"][0]["description"]
-            hum = int(cf["main"]["humidity"])
-            t = cf.get("dt_txt") or datetime.fromtimestamp(cf.get("dt", 0), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-            
-            result = f'weather: {{temp_c: {temp_c}, feels_like_c: {feels_c}, description: "{desc}", humidity: {hum}, timestamp: "{t}"}}'
-            logger.info(f"Weather data retrieved successfully for {location}")
-            return result
-            
-        except requests.exceptions.RequestException as e:
-            last_error = e
-            logger.warning(f"Weather API request failed (attempt {attempt + 1}): {e}")
-            if attempt == 0:
+    params = {"q": location, "appid": api_key, "units": "metric"}
+    
+    try:
+        logger.debug(f"Weather forecast API request for {location}")
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        if not data.get("list"):
+            logger.warning(f"No forecast data available for {location}")
+            return f"No weather forecast available for {location}"
+        
+        # Process forecast data
+        forecasts = data["list"]
+        city_name = data.get("city", {}).get("name", location)
+        
+        # Group forecasts by date
+        daily_forecasts = {}
+        today = datetime.now().date()
+        
+        for forecast in forecasts:
+            dt_txt = forecast.get("dt_txt", "")
+            if not dt_txt:
                 continue
-        except Exception as e:
-            last_error = e
-            logger.error(f"Unexpected error getting weather data: {e}")
-            break
-
-    logger.error(f"Failed to get weather data for {location}: {last_error}")
-    return f"Weather data unavailable for {location}: {last_error or 'Unknown error'}"
+                
+            try:
+                forecast_datetime = datetime.strptime(dt_txt, "%Y-%m-%d %H:%M:%S")
+                forecast_date = forecast_datetime.date()
+                
+                # Only include forecasts for today and the next 'days' days
+                days_from_today = (forecast_date - today).days
+                if days_from_today < 0 or days_from_today >= days:
+                    continue
+                
+                if forecast_date not in daily_forecasts:
+                    daily_forecasts[forecast_date] = {
+                        'temps': [],
+                        'descriptions': [],
+                        'humidity': [],
+                        'pop': [],  # precipitation probability
+                        'times': []
+                    }
+                
+                # Extract data
+                main = forecast.get("main", {})
+                weather = forecast.get("weather", [{}])[0]
+                
+                daily_forecasts[forecast_date]['temps'].append(main.get("temp", 0))
+                daily_forecasts[forecast_date]['descriptions'].append(weather.get("description", ""))
+                daily_forecasts[forecast_date]['humidity'].append(main.get("humidity", 0))
+                daily_forecasts[forecast_date]['pop'].append(forecast.get("pop", 0) * 100)  # Convert to percentage
+                daily_forecasts[forecast_date]['times'].append(forecast_datetime.strftime("%H:%M"))
+                
+            except ValueError as e:
+                logger.warning(f"Error parsing forecast datetime '{dt_txt}': {e}")
+                continue
+        
+        if not daily_forecasts:
+            return f"No valid forecast data found for {location}"
+        
+        # Format the response
+        result_lines = [f"Weather forecast for {city_name}:"]
+        
+        for date in sorted(daily_forecasts.keys()):
+            day_data = daily_forecasts[date]
+            
+            if not day_data['temps']:
+                continue
+            
+            # Calculate daily summary
+            min_temp = round(min(day_data['temps']), 1)
+            max_temp = round(max(day_data['temps']), 1)
+            avg_humidity = round(sum(day_data['humidity']) / len(day_data['humidity']))
+            max_pop = round(max(day_data['pop'])) if day_data['pop'] else 0
+            
+            # Get most common description
+            desc_counts = {}
+            for desc in day_data['descriptions']:
+                desc_counts[desc] = desc_counts.get(desc, 0) + 1
+            most_common_desc = max(desc_counts, key=desc_counts.get) if desc_counts else "unknown"
+            
+            # Format date
+            day_name = date.strftime("%A")
+            date_str = date.strftime("%Y-%m-%d")
+            
+            # Determine if it's today, tomorrow, etc.
+            days_from_today = (date - today).days
+            if days_from_today == 0:
+                date_label = "Today"
+            elif days_from_today == 1:
+                date_label = "Tomorrow"
+            else:
+                date_label = f"{day_name}"
+            
+            result_lines.append(
+                f"{date_label} ({date_str}): {min_temp}°C - {max_temp}°C, {most_common_desc}, "
+                f"humidity {avg_humidity}%, precipitation chance {max_pop}%"
+            )
+        
+        result = "\n".join(result_lines)
+        logger.info(f"Weather forecast retrieved successfully for {location} ({len(daily_forecasts)} days)")
+        return result
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Weather forecast API request failed: {e}")
+        return f"Weather forecast unavailable for {location}: Network error"
+    except Exception as e:
+        logger.error(f"Unexpected error getting weather forecast: {e}")
+        return f"Weather forecast unavailable for {location}: {str(e)}"
 
 
 @tool
@@ -100,7 +198,6 @@ def web_search_tavily(query: str, max_results: int = 2) -> str:
             max_results=max_results
         )
 
-        last_error = None
         search_response = None
         
         # Retry logic
@@ -110,7 +207,6 @@ def web_search_tavily(query: str, max_results: int = 2) -> str:
                 search_response = tavily_search.invoke(query)
                 break
             except Exception as e:
-                last_error = e
                 logger.warning(f"Tavily search failed (attempt {attempt + 1}): {e}")
                 if attempt == 0:
                     continue
@@ -167,4 +263,4 @@ def continue_chat(user_message: str) -> str:
 
 
 # Export all tools for easy import
-TRAVEL_TOOLS = [get_weather_data, web_search_tavily, continue_chat]
+TRAVEL_TOOLS = [get_weather_forecast, web_search_tavily, continue_chat]
