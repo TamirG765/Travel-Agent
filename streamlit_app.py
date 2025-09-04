@@ -1,18 +1,6 @@
-"""
-Travel Assistant Streamlit App
-
-A clean chat interface for the travel assistant with tool execution logging.
-Features:
-- Chat-only interface (user and assistant messages)
-- Expandable sidebar with tool execution logs
-- Session state management
-- Model configuration options
-"""
-
 import streamlit as st
 import uuid
 import logging
-import os
 from typing import Dict
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -21,8 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import our modules
-from src.agent import create_travel_agent
-from src.tools import TRAVEL_TOOLS
+from src.agent import create_travel_agent, invoke_agent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -72,30 +59,38 @@ def init_session_state():
     if 'thread_id' not in st.session_state:
         st.session_state.thread_id = str(uuid.uuid4())
     
-    if 'agent' not in st.session_state:
-        st.session_state.agent = None
+    if 'agent_ready' not in st.session_state:
+        st.session_state.agent_ready = False
     
     
-    if 'model_name' not in st.session_state:
-        st.session_state.model_name = os.getenv("OLLAMA_MODEL", "llama3.1")
-    
-    if 'temperature' not in st.session_state:
-        st.session_state.temperature = 0.2
 
 
 def create_agent():
     """Create or recreate the agent with current settings"""
     try:
-        st.session_state.agent = create_travel_agent(
-            model_name=st.session_state.model_name,
-            temperature=st.session_state.temperature
-        )
-        logger.info(f"Agent created with model: {st.session_state.model_name}")
+        create_travel_agent()
+        st.session_state.agent_ready = True
+        logger.info("Agent created successfully")
         return True
     except Exception as e:
         logger.error(f"Failed to create agent: {e}")
         st.error(f"Failed to create agent: {e}")
         return False
+
+
+def extract_final_answer(messages) -> str:
+    """Extract the clean final answer from agent response messages"""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.content and not msg.additional_kwargs.get("tool_calls"):
+            full_response = msg.content.strip()
+            # Extract only the text after the LAST "Final answer:"
+            if "Final answer:" in full_response:
+                # Split by "Final answer:" and take the last part
+                parts = full_response.split("Final answer:")
+                return parts[-1].strip()
+            else:
+                return full_response
+    return ""
 
 
 def display_message(message: Dict[str, str]):
@@ -106,8 +101,6 @@ def display_message(message: Dict[str, str]):
     else:
         st.markdown(f'<div class="assistant-message">{message["content"]}</div>', 
                    unsafe_allow_html=True)
-
-
 
 
 def sidebar():
@@ -122,8 +115,6 @@ def sidebar():
         **Real-time capabilities:**
         - 🌤️ Weather data for packing advice
         - 🔍 Web search for current travel info
-        
-        The agent thinks step-by-step and uses tools when needed to provide accurate, up-to-date travel recommendations.
         """)
         
         st.divider()
@@ -140,7 +131,7 @@ def main():
     init_session_state()
     
     # Create agent if not exists
-    if st.session_state.agent is None:
+    if not st.session_state.agent_ready:
         with st.spinner("Initializing Travel Assistant..."):
             if not create_agent():
                 st.stop()
@@ -173,7 +164,7 @@ def main():
         with st.spinner("✈️ Thinking..."):
             try:
                 # Invoke agent
-                result = st.session_state.agent.invoke(
+                result = invoke_agent(
                     [HumanMessage(content=prompt)], 
                     st.session_state.thread_id
                 )
@@ -181,18 +172,7 @@ def main():
                 messages = result.get("messages", [])
                 
                 # Get final assistant response
-                assistant_response = ""
-                for msg in reversed(messages):
-                    if isinstance(msg, AIMessage) and msg.content and not msg.additional_kwargs.get("tool_calls"):
-                        full_response = msg.content.strip()
-                        # Extract only the text after the LAST "Final answer:"
-                        if "Final answer:" in full_response:
-                            # Split by "Final answer:" and take the last part
-                            parts = full_response.split("Final answer:")
-                            assistant_response = parts[-1].strip()
-                        else:
-                            assistant_response = full_response
-                        break
+                assistant_response = extract_final_answer(messages)
                 
                 if assistant_response:
                     # Add assistant response to history

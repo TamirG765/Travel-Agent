@@ -1,12 +1,3 @@
-"""
-Travel Assistant Tools
-
-This module contains all the tools used by the travel agent:
-- Weather data retrieval
-- Web search for travel information  
-- Chat continuation for generic advice
-"""
-
 import os
 import requests
 import logging
